@@ -124,51 +124,57 @@ def transcribe_file_command(args):
         console.print(f"[red]Error: Audio file '{args.audio_file}' not found[/red]")
         return
     
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TimeElapsedColumn(),
-        console=console
-    ) as progress:
-        # Create model
-        task = progress.add_task("[green]Loading model...", total=None)
-        model = create_model(
-            model_type=args.model_type,
-            model_size=args.model_size,
-            language=args.language,
-            device=args.device,
-            compute_type=args.compute_type,
-            cache_dir=args.cache_dir,
-            batch_size=args.batch_size,
-            quantization=args.quantization
-        )
-        model.load_model()
-        progress.update(task, completed=True)
+    model = None
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TimeElapsedColumn(),
+            console=console
+        ) as progress:
+            # Create model
+            task = progress.add_task("[green]Loading model...", total=None)
+            model = create_model(
+                model_type=args.model_type,
+                model_size=args.model_size,
+                language=args.language,
+                device=args.device,
+                compute_type=args.compute_type,
+                cache_dir=args.cache_dir,
+                batch_size=args.batch_size,
+                quantization=args.quantization
+            )
+            model.load_model()
+            progress.update(task, completed=True)
+            
+            # Transcribe file
+            task = progress.add_task(f"[green]Transcribing {os.path.basename(args.audio_file)}...", total=None)
+            start_time = time.time()
+            result = model.transcribe(args.audio_file, prompt=args.prompt)
+            inference_time = time.time() - start_time
+            progress.update(task, completed=True)
         
-        # Transcribe file
-        task = progress.add_task(f"[green]Transcribing {os.path.basename(args.audio_file)}...", total=None)
-        start_time = time.time()
-        result = model.transcribe(args.audio_file, prompt=args.prompt)
-        inference_time = time.time() - start_time
-        progress.update(task, completed=True)
-    
-    # Display results
-    console.print(Panel(
-        result["text"],
-        title=f"Transcription ({inference_time:.2f}s)",
-        subtitle=f"Model: {args.model_type}/{args.model_size}",
-        style="green"
-    ))
-    
-    # Save result if output file specified
-    if args.output:
-        with open(args.output, "w") as f:
-            if args.output.endswith(".json"):
-                json.dump(result, f, indent=2)
-            else:
-                f.write(result["text"])
-        console.print(f"[green]Results saved to {args.output}[/green]")
+        # Display results
+        console.print(Panel(
+            result["text"],
+            title=f"Transcription ({inference_time:.2f}s)",
+            subtitle=f"Model: {args.model_type}/{args.model_size}",
+            style="green"
+        ))
+        
+        # Save result if output file specified
+        if args.output:
+            with open(args.output, "w") as f:
+                if args.output.endswith(".json"):
+                    json.dump(result, f, indent=2)
+                else:
+                    f.write(result["text"])
+            console.print(f"[green]Results saved to {args.output}[/green]")
+    finally:
+        # Ensure model cleanup happens even if an exception occurs
+        if model is not None:
+            model.cleanup()
 
 
 def transcribe_mic_command(args):
@@ -179,181 +185,193 @@ def transcribe_mic_command(args):
         output_dir=args.output_dir or "recordings"
     )
     
-    # Create model
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console
-    ) as progress:
-        task = progress.add_task("[green]Loading model...", total=None)
-        model = create_model(
-            model_type=args.model_type,
-            model_size=args.model_size,
-            language=args.language,
-            device=args.device,
-            compute_type=args.compute_type,
-            cache_dir=args.cache_dir,
-            batch_size=args.batch_size,
-            quantization=args.quantization
-        )
-        model.load_model()
-        progress.update(task, completed=True)
-    
-    # Continuous streaming mode
-    if args.continuous:
-        console.print("[yellow]Starting continuous transcription. Press Ctrl+C to stop...[/yellow]")
+    model = None
+    try:
+        # Create model
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console
+        ) as progress:
+            task = progress.add_task("[green]Loading model...", total=None)
+            model = create_model(
+                model_type=args.model_type,
+                model_size=args.model_size,
+                language=args.language,
+                device=args.device,
+                compute_type=args.compute_type,
+                cache_dir=args.cache_dir,
+                batch_size=args.batch_size,
+                quantization=args.quantization
+            )
+            model.load_model()
+            progress.update(task, completed=True)
         
-        # Set up callback for processing audio chunks
-        def process_audio(audio_data, sample_rate):
-            if len(audio_data) < sample_rate:  # Skip very short segments
-                return
-                
-            result = model.transcribe(audio_data)
-            if result["text"].strip():  # Only print if there's actually text
-                console.print(f"[green]{result['text']}[/green]")
-        
-        try:
-            # Start streaming with callback
-            recorder.start_streaming(callback_fn=process_audio)
+        # Continuous streaming mode
+        if args.continuous:
+            console.print("[yellow]Starting continuous transcription. Press Ctrl+C to stop...[/yellow]")
             
-            # Keep running until interrupted
-            while True:
-                time.sleep(0.1)
-                
-        except KeyboardInterrupt:
-            console.print("[yellow]Stopping transcription...[/yellow]")
-            recorder.stop_streaming()
-    
-    # Manual recording mode
-    else:
-        console.print("[yellow]Press Enter to start recording, then Enter again to stop...[/yellow]")
-        try:
-            while True:
-                input("Press Enter to start recording...")
-                console.print("[red]Recording... Press Enter to stop[/red]")
-                recorder.start_recording()
-                input()
-                audio_data = recorder.stop_recording(save=args.save_audio)
-                
-                if audio_data is not None:
-                    with Progress(
-                        SpinnerColumn(),
-                        TextColumn("[progress.description]{task.description}"),
-                        console=console
-                    ) as progress:
-                        task = progress.add_task("[green]Transcribing...", total=None)
-                        result = model.transcribe(audio_data, prompt=args.prompt)
-                        progress.update(task, completed=True)
+            # Set up callback for processing audio chunks
+            def process_audio(audio_data, sample_rate):
+                if len(audio_data) < sample_rate:  # Skip very short segments
+                    return
                     
-                    # Display result
-                    console.print(Panel(result["text"], title="Transcription", style="green"))
+                result = model.transcribe(audio_data)
+                if result["text"].strip():  # Only print if there's actually text
+                    console.print(f"[green]{result['text']}[/green]")
+            
+            try:
+                # Start streaming with callback
+                recorder.start_streaming(callback_fn=process_audio)
                 
-                if input("Continue? (y/n): ").lower() != 'y':
-                    break
+                # Keep running until interrupted
+                while True:
+                    time.sleep(0.1)
                     
-        except KeyboardInterrupt:
-            if recorder.recording:
-                recorder.stop_recording(save=args.save_audio)
-            console.print("[yellow]Exiting...[/yellow]")
+            except KeyboardInterrupt:
+                console.print("[yellow]Stopping transcription...[/yellow]")
+                recorder.stop_streaming()
+        
+        # Manual recording mode
+        else:
+            console.print("[yellow]Press Enter to start recording, then Enter again to stop...[/yellow]")
+            try:
+                while True:
+                    input("Press Enter to start recording...")
+                    console.print("[red]Recording... Press Enter to stop[/red]")
+                    recorder.start_recording()
+                    input()
+                    audio_data = recorder.stop_recording(save=args.save_audio)
+                    
+                    if audio_data is not None:
+                        with Progress(
+                            SpinnerColumn(),
+                            TextColumn("[progress.description]{task.description}"),
+                            console=console
+                        ) as progress:
+                            task = progress.add_task("[green]Transcribing...", total=None)
+                            result = model.transcribe(audio_data, prompt=args.prompt)
+                            progress.update(task, completed=True)
+                        
+                        # Display result
+                        console.print(Panel(result["text"], title="Transcription", style="green"))
+                    
+                    if input("Continue? (y/n): ").lower() != 'y':
+                        break
+                        
+            except KeyboardInterrupt:
+                if recorder.recording:
+                    recorder.stop_recording(save=args.save_audio)
+                console.print("[yellow]Exiting...[/yellow]")
+    finally:
+        # Ensure model cleanup happens even if an exception occurs
+        if model is not None:
+            model.cleanup()
 
 
 def benchmark_command(args):
     """Run benchmark on models."""
     # Validate audio files
-    audio_files = []
-    for file_pattern in args.audio_files:
-        # Handle glob patterns
-        from glob import glob
-        files = glob(file_pattern)
-        if not files:
-            console.print(f"[yellow]Warning: No files match pattern '{file_pattern}'[/yellow]")
-        audio_files.extend(files)
+    for audio_file in args.audio_files:
+        if not os.path.exists(audio_file):
+            console.print(f"[red]Error: Audio file '{audio_file}' not found[/red]")
+            return
     
-    if not audio_files:
-        console.print("[red]Error: No audio files found for benchmarking[/red]")
-        return
-    
-    # Parse model specifications
-    model_specs = []
+    # Parse models
+    models_to_benchmark = []
     for model_spec in args.models:
-        parts = model_spec.split("/")
-        if len(parts) == 2:
-            model_type, model_size = parts
-            model_specs.append((model_type, model_size))
-        else:
-            console.print(f"[yellow]Warning: Invalid model spec '{model_spec}', should be 'type/size'[/yellow]")
+        if '/' not in model_spec:
+            console.print(f"[red]Error: Invalid model specification '{model_spec}'. Format should be 'type/size'[/red]")
+            continue
+            
+        model_type, model_size = model_spec.split('/', 1)
+        models_to_benchmark.append((model_type, model_size))
     
-    if not model_specs:
-        console.print("[red]Error: No valid model specifications provided[/red]")
+    if not models_to_benchmark:
+        console.print("[red]Error: No valid models specified[/red]")
         return
+        
+    # Run benchmarks
+    benchmark_results = []
     
-    # Create models
-    models = []
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console
-    ) as progress:
-        for model_type, model_size in model_specs:
-            task = progress.add_task(f"[green]Loading {model_type}/{model_size}...", total=None)
-            try:
-                model = create_model(
-                    model_type=model_type,
-                    model_size=model_size,
-                    device=args.device,
-                    compute_type=args.compute_type,
-                    cache_dir=args.cache_dir,
-                    batch_size=args.batch_size,
-                    quantization=args.quantization
-                )
-                models.append(model)
-                progress.update(task, completed=True)
-            except Exception as e:
-                progress.update(task, description=f"[red]Failed to load {model_type}/{model_size}: {e}[/red]")
-    
-    if not models:
-        console.print("[red]Error: No models could be loaded for benchmarking[/red]")
-        return
-    
-    # Run benchmark
-    results = run_benchmark(
-        models=models,
-        audio_paths=audio_files,
-        output_dir=args.output_dir,
-        num_runs=args.num_runs
-    )
+    for model_type, model_size in models_to_benchmark:
+        # Create and load model
+        model = None
+        try:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console
+            ) as progress:
+                task = progress.add_task(f"[green]Loading {model_type}/{model_size}...", total=None)
+                
+                try:
+                    model = create_model(
+                        model_type=model_type,
+                        model_size=model_size,
+                        device=args.device,
+                        compute_type=args.compute_type,
+                        batch_size=args.batch_size,
+                        quantization=args.quantization
+                    )
+                    model.load_model()
+                    progress.update(task, completed=True)
+                    
+                    # Benchmark on each audio file
+                    for audio_file in args.audio_files:
+                        audio_task = progress.add_task(
+                            f"[green]Benchmarking {os.path.basename(audio_file)}...",
+                            total=None
+                        )
+                        
+                        benchmark_result = model.benchmark(
+                            audio=audio_file,
+                            num_runs=args.num_runs
+                        )
+                        
+                        # Add audio file info
+                        benchmark_result["audio_file"] = os.path.basename(audio_file)
+                        benchmark_results.append(benchmark_result)
+                        
+                        progress.update(audio_task, completed=True)
+                        
+                except Exception as e:
+                    console.print(f"[red]Error benchmarking {model_type}/{model_size}: {str(e)}[/red]")
+        finally:
+            # Ensure model cleanup happens even if an exception occurs
+            if model is not None:
+                model.cleanup()
     
     # Display results
-    table = Table(title="Benchmark Results")
-    table.add_column("Model", style="cyan")
-    table.add_column("Audio File", style="green")
-    table.add_column("Avg Time (s)", style="magenta")
-    table.add_column("Min Time (s)")
-    table.add_column("Max Time (s)")
-    
-    for result in results["results"]:
-        model_idx = result["model_idx"]
-        audio_idx = result["audio_idx"]
-        model_name = f"{results['models'][model_idx]['type']}/{results['models'][model_idx]['size']}"
-        audio_name = os.path.basename(results["audio_files"][audio_idx]["path"])
+    if benchmark_results:
+        # Create table
+        table = Table(title="Benchmark Results")
+        table.add_column("Model", style="cyan")
+        table.add_column("Size", style="magenta")
+        table.add_column("Audio", style="blue")
+        table.add_column("Avg Time (s)", style="green")
+        table.add_column("Min Time (s)")
+        table.add_column("Max Time (s)")
         
-        table.add_row(
-            model_name,
-            audio_name,
-            f"{result['avg_inference_time']:.2f}",
-            f"{result['min_inference_time']:.2f}",
-            f"{result['max_inference_time']:.2f}"
-        )
-    
-    console.print(table)
-    
-    # Plot results if requested
-    if args.plot:
-        try:
-            plot_path = os.path.join(args.output_dir, "benchmark_plot.png") if args.output_dir else None
-            plot_benchmark_results(results, output_path=plot_path, plot_type=args.plot_type)
-        except Exception as e:
-            console.print(f"[red]Error creating plot: {e}[/red]")
+        for result in benchmark_results:
+            table.add_row(
+                result["model_type"].replace("Model", ""),
+                result["model_size"],
+                result["audio_file"],
+                f"{result['avg_inference_time']:.2f}",
+                f"{result['min_inference_time']:.2f}",
+                f"{result['max_inference_time']:.2f}"
+            )
+            
+        console.print(table)
+        
+        # Generate plot if requested
+        if args.plot:
+            try:
+                plot_benchmark_results(benchmark_results, plot_type=args.plot_type)
+                console.print("[green]Benchmark plot saved to 'benchmark_results.png'[/green]")
+            except Exception as e:
+                console.print(f"[red]Error generating plot: {str(e)}[/red]")
 
 
 def parse_args():

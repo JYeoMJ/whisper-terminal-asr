@@ -112,3 +112,18 @@ class ASRModel(ABC):
             "num_runs": num_runs,
             "result": result,
         }
+
+    def cleanup(self):
+        """
+        Release resources held by the model.
+        
+        This method should be called when the model is no longer needed
+        to ensure proper resource cleanup and prevent memory leaks.
+        """
+        # Set model to None to allow for garbage collection
+        # This doesn't delete downloaded weights/files
+        self.model = None
+        
+        # Force garbage collection
+        import gc
+        gc.collect()

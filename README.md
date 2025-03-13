@@ -39,20 +39,36 @@ git clone https://github.com/yourusername/whisper-term-asr.git
 cd whisper-term-asr
 ```
 
-2. Install the package with desired components:
+2. Install the package with desired components using uv:
 
 ```bash
+# Install uv if you don't have it yet
+# curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Create a virtual environment (recommended)
+uv venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
 # Basic installation
-pip install -e .
+uv pip install .
 
 # With all model implementations
-pip install -e ".[all]"
+uv pip install ".[all]"
 
 # Apple Silicon users might want just Lightning MLX (recommended for fastest performance)
-pip install -e ".[lightning-mlx]"
+uv pip install ".[lightning-mlx]"
 
 # For visualization support (benchmarking plots)
-pip install -e ".[vis]"
+uv pip install ".[vis]"
+
+# Generate a requirements file for reproducible installations (optional)
+uv pip freeze > requirements.txt
+# Then install from the requirements file:
+uv pip sync requirements.txt
+
+# Legacy pip installation (much slower)
+pip install .
+pip install ".[all]"
 ```
 
 ## Usage

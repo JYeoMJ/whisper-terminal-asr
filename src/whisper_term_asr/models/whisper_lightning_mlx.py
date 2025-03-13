@@ -168,3 +168,32 @@ class LightningWhisperMLXModel(ASRModel):
             formatted_result["segments"] = result["segments"]
         
         return formatted_result
+        
+    def cleanup(self):
+        """
+        Release resources for Lightning Whisper MLX model.
+        
+        This implementation focuses on properly cleaning up MLX-specific resources
+        while preserving downloaded model weights.
+        """
+        if hasattr(self, 'model') and self.model is not None:
+            # Store a reference to the model before setting it to None
+            model = self.model
+            self.model = None
+            
+            # If the model has a specific cleanup method, call it
+            if hasattr(model, 'unload') and callable(getattr(model, 'unload')):
+                try:
+                    model.unload()
+                except Exception:
+                    pass
+            
+            # For MLX specifically, try to release MPS memory
+            try:
+                import mlx.core as mx
+                mx.clear_memory_pool()  # Release GPU memory
+            except Exception:
+                pass
+                
+        # Call parent cleanup to handle garbage collection
+        super().cleanup()

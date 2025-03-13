@@ -1,0 +1,97 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.env/
+.venv/
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+nosetests.xml
+coverage.xml
+*.cover
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Whisper model files and downloads
+*.pt
+*.bin
+*.pth
+models/
+downloads/
+
+# ML specific cache directories
+.torch/
+.cache/
+.huggingface/
+.keras/
+
+# Audio files
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+*.aac
+
+# Temp files
+tmp/
+temp/
+*.tmp
+
+# Lightning Whisper MLX model files
+*.mlxmodel
+*.mlxir
+mlx_models/
+mlx_weights/
+mlx_configs/
+
+# Logs
+logs/
+*.log
+
+# Config files with sensitive information
+config.ini
+.env
+settings.json
+secrets.yaml
+
+# Datasets
+datasets/
+data/

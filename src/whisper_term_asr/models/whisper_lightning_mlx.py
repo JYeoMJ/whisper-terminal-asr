@@ -8,6 +8,7 @@ import time
 import numpy as np
 import tempfile
 import soundfile as sf
+import re
 from typing import Dict, Any, Optional, Union, List
 
 try:
@@ -120,6 +121,12 @@ class LightningWhisperMLXModel(ASRModel):
             # File path - can be handled directly
             audio_path = audio
         else:
+            # Fix NaN values in audio data that can cause exclamation mark outputs
+            # This uses the numpy property that NaN != NaN
+            if np.issubdtype(audio.dtype, np.floating) and np.any(audio != audio):
+                audio = audio.copy()  # Create a copy to avoid modifying the original
+                audio[audio != audio] = 0.0  # Replace NaN values with zeros
+            
             # For numpy arrays, we need to save to a temporary file
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
                 temp_path = temp_file.name
@@ -155,9 +162,19 @@ class LightningWhisperMLXModel(ASRModel):
             except:
                 pass
         
+        # Get the transcription text and filter out problematic outputs
+        text = result.get("text", "")
+        
+        # Only filter out strings that are MOSTLY exclamation marks (>80% of the string)
+        if text.strip():
+            exclamation_count = text.count('!')
+            if exclamation_count > 0 and exclamation_count / len(text.strip()) > 0.8:
+                # If it's just a string of mostly exclamation marks, replace with empty string
+                text = ""
+        
         # Format result similar to the other implementations
         formatted_result = {
-            "text": result.get("text", ""),
+            "text": text,
             "segments": [],  # Lightning MLX might not provide segments by default
             "language": self.language,  # May not be accurate
             "inference_time": inference_time
@@ -165,7 +182,21 @@ class LightningWhisperMLXModel(ASRModel):
         
         # Add segments if available
         if "segments" in result:
-            formatted_result["segments"] = result["segments"]
+            # Also filter exclamation marks in segments
+            clean_segments = []
+            for segment in result["segments"]:
+                if "text" in segment:
+                    segment_text = segment["text"]
+                    # Only filter if the segment is mostly exclamation marks
+                    if segment_text.strip():
+                        exclamation_count = segment_text.count('!')
+                        if exclamation_count > 0 and exclamation_count / len(segment_text.strip()) > 0.8:
+                            segment_text = ""
+                    segment["text"] = segment_text
+                clean_segments.append(segment)
+            formatted_result["segments"] = clean_segments
+        else:
+            formatted_result["segments"] = result.get("segments", [])
         
         return formatted_result
         

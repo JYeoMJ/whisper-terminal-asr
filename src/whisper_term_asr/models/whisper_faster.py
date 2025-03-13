@@ -4,11 +4,17 @@ Uses the Faster Whisper implementation based on CTranslate2.
 """
 
 import os
+import time
 import numpy as np
+import re
 import soundfile as sf
 from typing import Dict, Any, Optional, Union, List
 
-from faster_whisper import WhisperModel
+try:
+    from faster_whisper import WhisperModel
+    HAS_FASTER_WHISPER = True
+except ImportError:
+    HAS_FASTER_WHISPER = False
 
 from .base import ASRModel
 
@@ -113,6 +119,11 @@ class FasterWhisperModel(ASRModel):
             )
         else:
             # NumPy array
+            # Fix NaN values in audio data that can cause exclamation mark outputs
+            if hasattr(audio, "dtype") and np.issubdtype(audio.dtype, np.floating) and np.any(audio != audio):
+                audio = audio.copy()  # Create a copy to avoid modifying the original
+                audio[audio != audio] = 0.0  # Replace NaN values with zeros
+                
             if hasattr(audio, "dtype") and np.issubdtype(audio.dtype, np.floating):
                 # If audio is float and already normalized between -1 and 1, pass directly
                 audio_data = audio
@@ -131,11 +142,20 @@ class FasterWhisperModel(ASRModel):
         # Convert segments to list to make it serializable
         segments_list = []
         for segment in segments:
+            # Filter exclamation marks in segment text
+            segment_text = segment.text
+            if segment_text:
+                # Only filter if the segment is mostly exclamation marks
+                if segment_text.strip():
+                    exclamation_count = segment_text.count('!')
+                    if exclamation_count > 0 and exclamation_count / len(segment_text.strip()) > 0.8:
+                        segment_text = ""
+            
             segments_list.append({
                 "id": segment.id,
                 "start": segment.start,
                 "end": segment.end,
-                "text": segment.text,
+                "text": segment_text,
                 "words": [{"word": word.word, "start": word.start, "end": word.end, "probability": word.probability} 
                          for word in (segment.words or [])],
                 "temperature": segment.temperature,
@@ -144,9 +164,19 @@ class FasterWhisperModel(ASRModel):
                 "no_speech_prob": segment.no_speech_prob,
             })
             
+        # Join the cleaned segment texts
+        full_text = " ".join(segment["text"] for segment in segments_list if segment["text"])
+        
+        # Apply exclamation mark filtering to the full text as a final check
+        if full_text:
+            # Only filter if the text is mostly exclamation marks
+            exclamation_count = full_text.count('!')
+            if exclamation_count > 0 and exclamation_count / len(full_text.strip()) > 0.8:
+                full_text = ""
+        
         result = {
             "segments": segments_list,
-            "text": " ".join(segment["text"] for segment in segments_list),
+            "text": full_text,
             "language": info.language,
             "language_probability": info.language_probability,
         }

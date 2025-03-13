@@ -7,6 +7,7 @@ import os
 import time
 import numpy as np
 import tempfile
+import re
 import soundfile as sf
 from typing import Dict, Any, Optional, Union, List
 
@@ -163,6 +164,11 @@ class InsanelyFastWhisperModel(ASRModel):
             # For file paths
             audio_path = audio
         else:
+            # Fix NaN values in audio data that can cause exclamation mark outputs
+            if np.issubdtype(audio.dtype, np.floating) and np.any(audio != audio):
+                audio = audio.copy()  # Create a copy to avoid modifying the original
+                audio[audio != audio] = 0.0  # Replace NaN values with zeros
+                
             # For numpy arrays, we need to save to a temporary file
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
                 temp_path = temp_file.name
@@ -178,22 +184,17 @@ class InsanelyFastWhisperModel(ASRModel):
             audio_path = temp_path
         
         # Set transcription options
-        generate_kwargs = {}
-        if self.language:
-            generate_kwargs["language"] = self.language
+        pipe_options = {}
         
+        # Add any prompt as initial_prompt if provided
         if prompt:
-            generate_kwargs["prompt"] = prompt
-        
-        # Perform transcription
+            pipe_options["initial_prompt"] = prompt
+            
+        # Transcribe the audio
         start_time = time.time()
-        result = self.model(
-            audio_path,
-            chunk_length_s=self.chunk_length_s,
-            batch_size=self.batch_size,
-            return_timestamps=True,
-            generate_kwargs=generate_kwargs
-        )
+        
+        # We need to handle the different output formats from the pipeline
+        outputs = self.model.transcribe(audio_path, **pipe_options)
         inference_time = time.time() - start_time
         
         # Clean up temporary file if created
@@ -203,22 +204,42 @@ class InsanelyFastWhisperModel(ASRModel):
             except:
                 pass
         
-        # Format result similar to OpenAI Whisper
-        formatted_result = {
-            "text": result["text"],
-            "inference_time": inference_time,
-            "language": self.language,  # May not be accurate if auto-detected
+        # Extract the text and chunks
+        if isinstance(outputs, dict):
+            # New format returns a dictionary
+            text = outputs.get("text", "")
+            chunks = outputs.get("chunks", [])
+        else:
+            # Old format just returns text
+            text = outputs
+            chunks = []
+            
+        # Filter out problematic exclamation marks
+        # Only filter if the text is mostly exclamation marks
+        if text.strip():
+            exclamation_count = text.count('!')
+            if exclamation_count > 0 and exclamation_count / len(text.strip()) > 0.8:
+                text = ""
+            
+        # Also filter chunks
+        cleaned_chunks = []
+        for chunk in chunks:
+            if chunk.get("text"):
+                chunk_text = chunk["text"]
+                # Only filter if the chunk is mostly exclamation marks
+                if chunk_text.strip():
+                    exclamation_count = chunk_text.count('!')
+                    if exclamation_count > 0 and exclamation_count / len(chunk_text.strip()) > 0.8:
+                        chunk_text = ""
+                chunk["text"] = chunk_text
+            cleaned_chunks.append(chunk)
+                
+        # Format the result
+        result = {
+            "text": text,
+            "segments": cleaned_chunks,
+            "language": self.language,  # May not be accurate
+            "inference_time": inference_time
         }
         
-        # Add chunks/segments if available
-        if "chunks" in result:
-            formatted_result["segments"] = []
-            for i, chunk in enumerate(result["chunks"]):
-                formatted_result["segments"].append({
-                    "id": i,
-                    "start": chunk["timestamp"][0] if isinstance(chunk["timestamp"], list) else None,
-                    "end": chunk["timestamp"][1] if isinstance(chunk["timestamp"], list) else None,
-                    "text": chunk["text"]
-                })
-        
-        return formatted_result
+        return result

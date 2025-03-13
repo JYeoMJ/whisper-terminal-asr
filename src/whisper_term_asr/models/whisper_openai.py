@@ -4,8 +4,10 @@ Uses the original Whisper model from OpenAI.
 """
 
 import os
+import time
 import numpy as np
 from typing import Dict, Any, Optional, Union
+import re
 
 import whisper
 
@@ -103,15 +105,55 @@ class OpenAIWhisperModel(ASRModel):
         if self.model is None:
             self.load_model()
         
-        # Set transcription options
-        options = {}
-        if self.language:
-            options["language"] = self.language
+        # Set default options
+        options = {
+            "language": self.language,
+            "verbose": False,
+        }
         
+        # Add prompt if provided
         if prompt:
             options["initial_prompt"] = prompt
+            
+        # Handle different audio input types
+        if isinstance(audio, str):
+            # For file paths
+            start_time = time.time()
+            result = self.model.transcribe(audio, **options)
+            inference_time = time.time() - start_time
+        else:
+            # Fix NaN values in audio data that can cause exclamation mark outputs
+            if np.issubdtype(audio.dtype, np.floating) and np.any(audio != audio):
+                audio = audio.copy()  # Create a copy to avoid modifying the original
+                audio[audio != audio] = 0.0  # Replace NaN values with zeros
+                
+            # For numpy arrays
+            start_time = time.time()
+            result = self.model.transcribe(audio, **options)  
+            inference_time = time.time() - start_time
+            
+        # Filter out problematic exclamation marks in the main text
+        text = result["text"]
+        # Only filter if the text is mostly exclamation marks
+        if text.strip():
+            exclamation_count = text.count('!')
+            if exclamation_count > 0 and exclamation_count / len(text.strip()) > 0.8:
+                text = ""
+        result["text"] = text
         
-        # Run transcription
-        result = self.model.transcribe(audio, **options)
+        # Filter out exclamation marks in segments
+        if "segments" in result:
+            for segment in result["segments"]:
+                if "text" in segment:
+                    segment_text = segment["text"]
+                    # Only filter if the segment is mostly exclamation marks
+                    if segment_text.strip():
+                        exclamation_count = segment_text.count('!')
+                        if exclamation_count > 0 and exclamation_count / len(segment_text.strip()) > 0.8:
+                            segment_text = ""
+                    segment["text"] = segment_text
+            
+        # Add inference time to the result
+        result["inference_time"] = inference_time
         
         return result

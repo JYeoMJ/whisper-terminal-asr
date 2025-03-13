@@ -7,6 +7,9 @@ import os
 import time
 import numpy as np
 from typing import Dict, Any, Optional, Union, List
+import re
+import tempfile
+import soundfile as sf
 
 try:
     import mlx.core as mx
@@ -105,13 +108,15 @@ class MLXWhisperModel(ASRModel):
         
         # Handle different audio input types
         if isinstance(audio, str):
-            # For file paths, MLX-LM's Whisper implementation can handle them directly
+            # File path - can be handled directly
             audio_path = audio
         else:
+            # Fix NaN values in audio data that can cause exclamation mark outputs
+            if np.issubdtype(audio.dtype, np.floating) and np.any(audio != audio):
+                audio = audio.copy()  # Create a copy to avoid modifying the original
+                audio[audio != audio] = 0.0  # Replace NaN values with zeros
+                
             # For numpy arrays, we need to save to a temporary file
-            import tempfile
-            import soundfile as sf
-            
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
                 temp_path = temp_file.name
             
@@ -129,33 +134,56 @@ class MLXWhisperModel(ASRModel):
         options = {}
         if self.language:
             options["language"] = self.language
-        
+            
         if prompt:
             options["prompt"] = prompt
-        
+            
         # Perform transcription
         start_time = time.time()
+        
+        # MLX Whisper requires us to use the specific transcribe function
         result = self.model.transcribe(audio_path, **options)
         inference_time = time.time() - start_time
         
         # Clean up temporary file if created
         if isinstance(audio, np.ndarray) and 'temp_path' in locals():
-            os.unlink(temp_path)
+            try:
+                os.unlink(temp_path)
+            except:
+                pass
         
-        # Format result similar to OpenAI Whisper
+        # Filter out problematic exclamation marks in the main text
+        text = result.get("text", "")
+        # Only filter if the text is mostly exclamation marks
+        if text.strip():
+            exclamation_count = text.count('!')
+            if exclamation_count > 0 and exclamation_count / len(text.strip()) > 0.8:
+                text = ""
+            
+        # Format result similar to the other implementations
         formatted_result = {
-            "text": result.text,
-            "segments": [
-                {
-                    "id": i,
-                    "start": segment.start,
-                    "end": segment.end,
-                    "text": segment.text
-                }
-                for i, segment in enumerate(result.segments)
-            ],
-            "language": result.language if hasattr(result, "language") else self.language,
+            "text": text,
+            "segments": [],  # MLX might not provide segments by default
+            "language": self.language,  # May not be accurate
             "inference_time": inference_time
         }
+        
+        # Add segments if available
+        if "segments" in result:
+            # Also filter exclamation marks in segments
+            clean_segments = []
+            for segment in result["segments"]:
+                if "text" in segment:
+                    segment_text = segment["text"]
+                    # Only filter if the segment is mostly exclamation marks
+                    if segment_text.strip():
+                        exclamation_count = segment_text.count('!')
+                        if exclamation_count > 0 and exclamation_count / len(segment_text.strip()) > 0.8:
+                            segment_text = ""
+                    segment["text"] = segment_text
+                clean_segments.append(segment)
+            formatted_result["segments"] = clean_segments
+        else:
+            formatted_result["segments"] = result.get("segments", [])
         
         return formatted_result
